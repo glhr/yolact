@@ -20,6 +20,8 @@ aug_file  = 'weights/bboxes_aug.pkl'
 
 use_augmented_boxes = True
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 
 def intersect(box_a, box_b):
     """ We resize both tensors to [A,B,2] without new malloc:
@@ -80,7 +82,7 @@ def make_priors(conv_size, scales, aspect_ratios):
     for j, i in product(range(conv_h), range(conv_w)):
         x = (i + 0.5) / conv_w
         y = (j + 0.5) / conv_h
-        
+
         for scale, ars in zip(scales, aspect_ratios):
             for ar in ars:
                 w = scale * ar / conv_w
@@ -88,7 +90,7 @@ def make_priors(conv_size, scales, aspect_ratios):
 
                 # Point form
                 prior_data += [x - w/2, y - h/2, x + w/2, y + h/2]
-    
+
     return np.array(prior_data).reshape(-1, 4)
 
 # fixed_ssd_config
@@ -121,7 +123,7 @@ MEDIUM = 1
 LARGE = 2
 
 if __name__ == '__main__':
-        
+
     with open(dump_file, 'rb') as f:
         bboxes = pickle.load(f)
 
@@ -138,34 +140,34 @@ if __name__ == '__main__':
             sizes.append(LARGE)
 
     # Each box is in the form [im_w, im_h, pos_x, pos_y, size_x, size_y]
-    
+
     if use_augmented_boxes:
         with open(aug_file, 'rb') as f:
             bboxes_rel = pickle.load(f)
     else:
         bboxes_rel = to_relative(np.array(bboxes))
-        
+
 
     with torch.no_grad():
         sizes = torch.Tensor(sizes)
 
         anchors = [make_priors(cs, s, ar) for cs, s, ar in zip(conv_sizes, scales, aspect_ratios)]
         anchors = np.concatenate(anchors, axis=0)
-        anchors = torch.Tensor(anchors).cuda()
+        anchors = torch.Tensor(anchors).to(device)
 
-        bboxes_rel = torch.Tensor(bboxes_rel).cuda()
-        perGTAnchorMax = torch.zeros(bboxes_rel.shape[0]).cuda()
+        bboxes_rel = torch.Tensor(bboxes_rel).to(device)
+        perGTAnchorMax = torch.zeros(bboxes_rel.shape[0]).to(device)
 
         chunk_size = 1000
         for i in range((bboxes_rel.size(0) // chunk_size) + 1):
             start = i * chunk_size
             end   = min((i + 1) * chunk_size, bboxes_rel.size(0))
-            
+
             ious = jaccard(bboxes_rel[start:end, :], anchors)
             maxes, maxidx = torch.max(ious, dim=1)
 
             perGTAnchorMax[start:end] = maxes
-    
+
 
         hits = (perGTAnchorMax > 0.5).float()
 
@@ -176,6 +178,3 @@ if __name__ == '__main__':
             _hits = hits[sizes == i]
             _size = (1 if _hits.size(0) == 0 else _hits.size(0))
             print(metric + ' recall: %.2f' % ((torch.sum(_hits) / _size) * 100))
-
-
-

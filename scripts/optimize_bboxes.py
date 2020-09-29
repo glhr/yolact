@@ -20,6 +20,8 @@ aug_file  = 'weights/bboxes_aug.pkl'
 
 use_augmented_boxes = True
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 
 def intersect(box_a, box_b):
     """ We resize both tensors to [A,B,2] without new malloc:
@@ -80,7 +82,7 @@ def make_priors(conv_size, scales, aspect_ratios):
     for j, i in product(range(conv_h), range(conv_w)):
         x = (i + 0.5) / conv_w
         y = (j + 0.5) / conv_h
-        
+
         for scale, ars in zip(scales, aspect_ratios):
             for ar in ars:
                 w = scale * ar / conv_w
@@ -88,7 +90,7 @@ def make_priors(conv_size, scales, aspect_ratios):
 
                 # Point form
                 prior_data += [x - w/2, y - h/2, x + w/2, y + h/2]
-    return torch.Tensor(prior_data).view(-1, 4).cuda()
+    return torch.Tensor(prior_data).view(-1, 4).to(device)
 
 
 
@@ -104,7 +106,7 @@ batch_idx = 0
 def compute_hits(bboxes, anchors, iou_threshold=0.5):
     ious = jaccard(bboxes, anchors)
     perGTAnchorMax, _ = torch.max(ious, dim=1)
-    
+
     return (perGTAnchorMax > iou_threshold)
 
 def compute_recall(hits, base_hits):
@@ -136,8 +138,8 @@ def optimize(full_bboxes, optim_idx, batch_size=5000):
         make_priors(conv_sizes[idx], scales[idx], aspect_ratios[idx])
             for idx in range(len(conv_sizes)) if idx != optim_idx]
     base_hits = compute_hits(bboxes, torch.cat(anchor_base, dim=0))
-    
-    
+
+
     def set_x(x, scales, aspect_ratios):
         if optimize_scales:
             for i in range(len(scales)):
@@ -148,7 +150,7 @@ def optimize(full_bboxes, optim_idx, batch_size=5000):
                 for j in range(len(aspect_ratios[i])):
                     aspect_ratios[i][j] = x[k]
                     k += 1
-            
+
 
     res = minimize(step, x0=scales[optim_idx] if optimize_scales else sum(aspect_ratios[optim_idx], []), method='Powell',
         args = (set_x, bboxes, base_hits, optim_idx),)
@@ -163,7 +165,7 @@ def pretty_str(x:list):
         return '%.2f' % x
 
 if __name__ == '__main__':
-    
+
     if use_augmented_boxes:
         with open(aug_file, 'rb') as f:
             bboxes = pickle.load(f)
@@ -177,8 +179,8 @@ if __name__ == '__main__':
             bboxes = to_relative(bboxes)
 
     with torch.no_grad():
-        bboxes = torch.Tensor(bboxes).cuda()
-        
+        bboxes = torch.Tensor(bboxes).to(device)
+
         def print_out():
             if optimize_scales:
                 print('Scales: ' + pretty_str(scales))
@@ -191,14 +193,12 @@ if __name__ == '__main__':
                 print('%d ' % i, end='', flush=True)
                 optimize(bboxes, i)
             print('Done', end='\r')
-            
+
             print('(Iteration %d) ' % p, end='')
             print_out()
             print()
 
             optimize_scales = not optimize_scales
-        
+
         print('scales = ' + pretty_str(scales))
         print('aspect_ratios = ' + pretty_str(aspect_ratios))
-
-
